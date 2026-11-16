@@ -4,11 +4,13 @@ A small order-processing simulation in Python. An order moves through
 versioned states. Events may arrive late, out of order, or more than once. Ordering is
 decided by the version number, not by arrival time or timestamp.
 
-`order_processor.py` holds the `Order` class. It applies an event only
-when its version is the next expected one, buffers a later version as
-pending, ignores duplicates, and rejects updates from a worker whose
-fencing token is older than the highest token seen. `main.py` runs the
-three demos below.
+order_processor.py holds the Order class and the OrderEvent dataclass.
+Every update is an event carrying order_id, version, and status, plus
+the worker name and its fencing token for worker updates. An event is
+applied only when its version is the next expected one, a later version
+is buffered as pending, duplicates are ignored, a conflicting repeat of
+a pending version is rejected, and a worker update with a stale token
+or no token is rejected. main.py runs the three demos below.
 
 ## Running the program
 
@@ -23,7 +25,7 @@ python3 main.py fencing    # stale worker rejected by fencing token
 
 ## Example: correct event ordering
 
-Delivery order: v2, v1, v2 again.
+Delivery order: v2, v2 again, v2 with a different status, v1, v2 again.
 
 ```bash
 $ python3 main.py ordering
@@ -31,9 +33,13 @@ $ python3 main.py ordering
 
 ```
 === 1. Versioned event ordering ===
-Delivery order: v2, v1, v2 again
+Delivery order: v2, v2 again, v2 with a different status, v1, v2 again
 [RECEIVED] order-123 v2 PAID
 [BUFFERED] order-123 v2 PAID: waiting for missing version(s) [1]; status stays None
+[RECEIVED] order-123 v2 PAID
+[IGNORED]  order-123 v2 PAID: duplicate, already pending
+[RECEIVED] order-123 v2 SHIPPED
+[REJECTED] order-123 v2 SHIPPED: conflicts with pending v2 PAID; original kept
 [RECEIVED] order-123 v1 CREATED
 [APPLIED]  order-123 v1 CREATED -> status is now CREATED
 [APPLIED]  order-123 v2 PAID -> status is now PAID
@@ -50,11 +56,14 @@ order ends as PAID in the correct order.
 
 ## Evidence: duplicate handling
 
-The second v2 in the run above is the duplicate test. It is received
-again after v1 and v2 have already been applied, and the program logs
-`[IGNORED] order-123 v2 PAID: duplicate, already applied`. The final
-status stays PAID and the next expected version stays 3, so the
-duplicate has no effect.
+The run above tests duplicates twice. The second v2, received while
+v2 is still pending, is ignored (`duplicate, already pending`). A
+repeat of v2 with a different status (SHIPPED instead of PAID) is
+rejected (`conflicts with pending v2 PAID; original kept`), so it
+cannot overwrite the buffered event. The final v2, received after v1
+and v2 have already been applied, is ignored (`duplicate, already
+applied`). The final status stays PAID and the next expected version
+stays 3, so no duplicate has any effect.
 
 ## Evidence: missing-event case
 
@@ -92,6 +101,8 @@ Worker A has token 1, worker B has token 2
 [APPLIED]  order-789 v1 CREATED -> status is now CREATED
 [RECEIVED] order-789 v2 PAID from worker-B (token 2)
 [APPLIED]  order-789 v2 PAID -> status is now PAID
+[RECEIVED] order-789 v3 SHIPPED from worker-A (no token)
+[REJECTED] order-789 v3 SHIPPED from worker-A: worker update requires a fencing token
 [RECEIVED] order-789 v3 SHIPPED from worker-A (token 1)
 [REJECTED] order-789 v3 SHIPPED from worker-A: stale fencing token 1 < current 2
 [RECEIVED] order-789 v3 SHIPPED from worker-B (token 2)
@@ -100,8 +111,9 @@ order-789: status=SHIPPED, next expected version=4, pending versions=none
 ```
 
 The worker with the newer token (B, token 2) can update the order.
-The worker with the older token (A, token 1) is rejected, and the
-same update then succeeds from worker B.
+Worker A is rejected twice: once for sending no fencing token at
+all, and once for using its older token 1. The same update then
+succeeds from worker B.
 
 ![Stale worker rejection](screenshots/stale-worker.png)
 

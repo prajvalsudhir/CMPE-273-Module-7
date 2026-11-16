@@ -9,16 +9,19 @@ Usage:
 
 import sys
 
-from order_processor import Order
+from order_processor import Order, OrderEvent
 
 
 def demo_ordering():
     print("=== 1. Versioned event ordering ===")
-    print("Delivery order: v2, v1, v2 again")
+    print("Delivery order: v2, v2 again, v2 with a different status, "
+          "v1, v2 again")
     order = Order("order-123")
-    order.receive(2, "PAID")
-    order.receive(1, "CREATED")
-    order.receive(2, "PAID")
+    order.receive(OrderEvent("order-123", 2, "PAID"))
+    order.receive(OrderEvent("order-123", 2, "PAID"))
+    order.receive(OrderEvent("order-123", 2, "SHIPPED"))
+    order.receive(OrderEvent("order-123", 1, "CREATED"))
+    order.receive(OrderEvent("order-123", 2, "PAID"))
     print(order.summary())
     print()
 
@@ -27,7 +30,7 @@ def demo_missing():
     print("=== 2. Missing event ===")
     print("Only v2 arrives; v1 is missing")
     order = Order("order-456")
-    order.receive(2, "PAID")
+    order.receive(OrderEvent("order-456", 2, "PAID"))
     print(order.summary())
     print()
 
@@ -36,10 +39,16 @@ def demo_fencing():
     print("=== 3. Stale worker ===")
     print("Worker A has token 1, worker B has token 2")
     order = Order("order-789")
-    order.receive(1, "CREATED", worker="worker-A", fencing_token=1)
-    order.receive(2, "PAID", worker="worker-B", fencing_token=2)
-    order.receive(3, "SHIPPED", worker="worker-A", fencing_token=1)
-    order.receive(3, "SHIPPED", worker="worker-B", fencing_token=2)
+    order.receive(OrderEvent("order-789", 1, "CREATED",
+                             worker="worker-A", fencing_token=1))
+    order.receive(OrderEvent("order-789", 2, "PAID",
+                             worker="worker-B", fencing_token=2))
+    order.receive(OrderEvent("order-789", 3, "SHIPPED",
+                             worker="worker-A"))
+    order.receive(OrderEvent("order-789", 3, "SHIPPED",
+                             worker="worker-A", fencing_token=1))
+    order.receive(OrderEvent("order-789", 3, "SHIPPED",
+                             worker="worker-B", fencing_token=2))
     print(order.summary())
     print()
 
